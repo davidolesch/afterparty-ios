@@ -10,17 +10,26 @@ import Foundation
 import Combine
 import afterparty_models_swift
 
+struct Resource<A> {
+  let url: URL
+  let parse: (Data) throws -> A
+}
+
+extension Resource where A: Decodable {
+  init(url: URL) {
+    self.url = url
+    self.parse = { data in
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(A.self, from: data)
+    }
+  }
+}
+
 class AfterpartyAPI {
   private var session = URLSession(configuration: .default)
   private let apiQueue = DispatchQueue(label: "AfterpartyAPI", qos: .default, attributes: .concurrent)
-  private let decoder: JSONDecoder = {
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-    return decoder
-  }()
-  
-  private static let timeoutInterval = 10.0
-  
+    
   enum Error: LocalizedError, Identifiable {
     var id: String { localizedDescription }
     
@@ -57,92 +66,41 @@ class AfterpartyAPI {
           return EnvironmentVariables.rootURL.appendingPathComponent("mock/locations")
       }
     }
-    
-    var request: URLRequest {
-      switch self {
-        case .hello(let name):
-          var request = URLRequest(url: Endpoint.hello(name).url)
-          request.httpMethod = "GET"
-          return request
-        case .mockUsers:
-          var request = URLRequest(url: Endpoint.mockUsers.url)
-          request.httpMethod = "GET"
-          return request
-        case .mockLocations:
-          var request = URLRequest(url: Endpoint.mockLocations.url)
-          request.httpMethod = "GET"
-          return request
-        case .mockEvents:
-          var request = URLRequest(url: Endpoint.mockEvents.url)
-          request.httpMethod = "GET"
-          return request
-      }
-    }
   }
-  
-  func getHelloResponse(for name: String?) -> AnyPublisher<String, Error> {
-    session.dataTaskPublisher(for: Endpoint.hello(name).request)
+    
+  func load<A>(resource: Resource<A>) -> AnyPublisher<A, Error> {
+    session
+      .dataTaskPublisher(for: resource.url)
       .receive(on: apiQueue)
-      .map { $0.data }
-      .decode(type: String.self, decoder: decoder)
+      .tryMap { try resource.parse($0.data) }
       .mapError { error in
         switch error {
           case is URLError:
-            return Error.addressUnreachable(Endpoint.hello(name).url)
+            return Error.addressUnreachable(resource.url)
           default:
             return Error.invalidResponse
         }
       }
       .eraseToAnyPublisher()
+    }
+  
+  func getHelloResponse(for name: String?) -> AnyPublisher<String, Error> {
+    let resource = Resource<String>(url: Endpoint.hello(name).url)
+    return load(resource: resource)
   }
   
   func getMockEvents() -> AnyPublisher<[Event], Error> {
-    session.dataTaskPublisher(for: Endpoint.mockEvents.request)
-      .receive(on: apiQueue)
-      .map {
-        $0.data
-      }
-      .decode(type: [Event].self, decoder: decoder)
-      .mapError { error in
-        switch error {
-          case is URLError:
-            return Error.addressUnreachable(Endpoint.mockEvents.url)
-          default:
-            return Error.invalidResponse
-        }
-      }
-      .eraseToAnyPublisher()
+    let resource = Resource<[Event]>(url: Endpoint.mockLocations.url)
+    return load(resource: resource)
   }
   
   func getMockLocations() -> AnyPublisher<[Location], Error> {
-    session.dataTaskPublisher(for: Endpoint.mockLocations.request)
-      .receive(on: apiQueue)
-      .map { $0.data }
-      .decode(type: [Location].self, decoder: decoder)
-      .mapError { error in
-        switch error {
-          case is URLError:
-            return Error.addressUnreachable(Endpoint.mockLocations.url)
-          default:
-            return Error.invalidResponse
-        }
-      }
-      .eraseToAnyPublisher()
+    let resource = Resource<[Location]>(url: Endpoint.mockLocations.url)
+    return load(resource: resource)
   }
   
   func getMockUsers() -> AnyPublisher<[User], Error> {
-    session.dataTaskPublisher(for: Endpoint.mockUsers.request)
-      .receive(on: apiQueue)
-      .map { $0.data }
-      .decode(type: [User].self, decoder: decoder)
-      .mapError { error in
-        switch error {
-          case is URLError:
-            return Error.addressUnreachable(Endpoint.mockUsers.url)
-          default:
-            return Error.invalidResponse
-        }
-      }
-      .eraseToAnyPublisher()
+    let resource = Resource<[User]>(url: Endpoint.mockUsers.url)
+    return load(resource: resource)
   }
 }
